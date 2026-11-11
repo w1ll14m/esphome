@@ -2,8 +2,14 @@
 #include "node_type.h"
 
 #include "esphome/core/application.h"
+#include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/version.h"
+#ifdef USE_NETWORK
+#include "esphome/components/network/util.h"
+#include <cstdio>
+#endif
 
 namespace esphome::duco {
 
@@ -19,6 +25,30 @@ static constexpr uint32_t DISCOVERY_STEP_ID = 1;
 static constexpr uint32_t DISCOVERY_START_MS = 16000;
 static constexpr uint32_t DISCOVERY_STEP_MS = 1600;
 static constexpr uint8_t DISCOVERY_MAX_ATTEMPTS = 3;
+
+struct DucoInfoPlaceholder {
+  uint8_t target;
+  uint8_t item;
+  uint8_t group;
+  uint8_t status;
+  uint8_t value[4];
+};
+
+// Placeholders from the connectivity board replies in udp.log; values may be device-specific.
+static constexpr DucoInfoPlaceholder INFO_PLACEHOLDERS[] PROGMEM = {
+    {0, 0, 0, 1, {0x01, 0, 0, 0}}, {0, 1, 0, 1, {0x01, 0, 0, 0}},
+    {0, 2, 0, 0, {0, 0, 0, 0}}, {0, 3, 0, 0, {0, 0, 0, 0}}, {0, 4, 0, 0, {0, 0, 0, 0}},
+    {0, 0, 1, 1, {0, 0, 0, 0}}, {0, 1, 1, 1, {0xff, 0xff, 0xff, 0}},
+    {0, 2, 1, 1, {0, 0, 0, 0}}, {0, 3, 1, 1, {1, 0, 0, 0}},
+    {0, 4, 1, 0, {0x79, 0x91, 0, 0}},
+    {0, 0, 2, 1, {0x0a, 0x02, 0x02, 0xf1}}, {0, 1, 2, 1, {0x0a, 0x02, 0x00, 0x01}},
+    {0, 2, 2, 1, {0xcb, 0xe4, 0xd4, 0xe2}},
+    {0, 0, 3, 1, {0x83, 0x52, 0, 0}}, {0, 1, 3, 1, {8, 0, 0, 0}},
+    {0, 2, 3, 1, {3, 0, 0, 0}}, {0, 3, 3, 1, {0, 0, 0, 0}},
+    {0, 4, 3, 1, {0x6f, 0x42, 1, 0}},
+    {0, 0, 4, 1, {1, 0, 0, 0}}, {0, 0, 5, 1, {1, 0, 0, 0}}, {0, 0, 6, 1, {2, 0, 0, 0}},
+    {1, 0, 1, 1, {0, 1, 0, 0}}, {1, 0, 4, 1, {0x03, 0xe1, 0x42, 0x01}},
+};
 
 void Duco::loop() {
   const uint32_t now = App.get_loop_component_start_time();
@@ -41,6 +71,21 @@ void Duco::loop() {
 void Duco::reset_frame_() {
   this->rx_size_ = 0;
   this->escaped_ = false;
+}
+
+void Duco::send_reply_(uint8_t function, uint8_t id, const uint8_t *data, uint8_t size) {
+  uint8_t payload[3 + 20 + 2] = {static_cast<uint8_t>(size + 2), function, id};
+  if (size != 0)
+    std::copy_n(data, size, payload + 3);
+  put_le16(payload + 3 + size, crc16(payload, 3 + size));
+  uint8_t frame[2 + sizeof(payload) * 2] = {HEADER_START, HEADER_END};
+  size_t frame_size = 2;
+  for (size_t i = 0; i < size + 5u; i++) {
+    frame[frame_size++] = payload[i];
+    if (payload[i] == HEADER_START)
+      frame[frame_size++] = STUFFING;
+  }
+  this->write_array(frame, frame_size);
 }
 
 void Duco::close_request(DucoDevice *device) {
@@ -102,6 +147,91 @@ void Duco::finalize_message_() {
       return;
     }
     ESP_LOGV(TAG, "CRC check failed, ignored: %04X != %04X", computed_crc, remote_crc);
+  }
+
+  // The connectivity board acknowledges box-initiated 0x08 messages with an empty 0x0B and the same ID.
+  if (raw[1] == 0x08 && (length == 3 || length == 8)) {
+    this->send_reply_(0x0b, raw[2], nullptr, 0);
+    return;
+  }
+  if (raw[1] == 0x20 && length == 5) {
+    uint8_t data[] = {1, raw[4], raw[5], 0, 0, 0, 0};
+    bool supported = false;
+    for (size_t i = 0; i < sizeof(INFO_PLACEHOLDERS) / sizeof(INFO_PLACEHOLDERS[0]); i++) {
+      DucoInfoPlaceholder entry;
+      progmem_memcpy(&entry, &INFO_PLACEHOLDERS[i], sizeof(entry));
+      if (entry.target == raw[3] && entry.item == raw[4] && entry.group == raw[5]) {
+        data[0] = entry.status;
+        std::copy_n(entry.value, 4, data + 3);
+        supported = true;
+        break;
+      }
+    }
+    if (raw[3] == 0 && raw[5] == 3 && raw[4] <= 3) {
+      uint32_t version_part = 0;
+      switch (raw[4]) {
+        case 0:
+          version_part = ESPHOME_VERSION_CODE >> 16;
+          break;
+        case 1:
+          version_part = (ESPHOME_VERSION_CODE >> 8) & 0xff;
+          break;
+        case 2:
+          version_part = ESPHOME_VERSION_CODE & 0xff;
+          break;
+      }
+      put_le32(data + 3, version_part);
+      supported = true;
+    }
+    if (raw[3] == 0 && raw[5] == 3 && raw[4] >= 5 && raw[4] <= 7) {
+      static constexpr char SERIAL[] = "ESPHOME DUCO";
+      const uint8_t offset = (raw[4] - 5) * 4;
+      for (uint8_t i = 0; i < 4; i++)
+        data[3 + i] = SERIAL[offset + 3 - i];
+      supported = true;
+    }
+#ifdef USE_NETWORK
+    if (raw[3] == 0 && raw[5] == 2 && raw[4] == 0 && network::is_connected()) {
+      const auto addresses = network::get_ip_addresses();
+      for (const auto &address : addresses) {
+        if (!address.is_set() || !address.is_ip4())
+          continue;
+        char buffer[network::IP_ADDRESS_BUFFER_SIZE];
+        unsigned octets[4];
+        if (sscanf(address.str_to(buffer), "%u.%u.%u.%u", &octets[0], &octets[1], &octets[2], &octets[3]) == 4) {
+          for (uint8_t i = 0; i < 4; i++)
+            data[3 + i] = static_cast<uint8_t>(octets[i]);
+          supported = true;
+        }
+        break;
+      }
+    }
+    if (raw[3] == 0 && raw[5] == 2 && raw[4] == 2 && network::is_connected()) {
+      uint8_t mac[6];
+#ifdef USE_ETHERNET
+      if (ethernet::global_eth_component != nullptr && ethernet::global_eth_component->is_connected()) {
+        ethernet::global_eth_component->get_eth_mac_address_raw(mac);
+      } else
+#endif
+      {
+        get_mac_address_raw(mac);
+      }
+      for (uint8_t i = 0; i < 4; i++)
+        data[3 + i] = mac[5 - i];
+      supported = true;
+    }
+#endif
+    if (supported) {
+      this->send_reply_(0x21, raw[2], nullptr, 0);
+      this->send_reply_(0x22, raw[2], data, sizeof(data));
+      return;
+    }
+  }
+  if (raw[1] == 0x1c && length == 3 && raw[3] == 0) {
+    uint8_t status[20] = {3};
+    this->send_reply_(0x1d, raw[2], nullptr, 0);
+    this->send_reply_(0x1e, raw[2], status, sizeof(status));
+    return;
   }
 
   if (this->pending_.empty())  // no device, no answer to match

@@ -61,6 +61,7 @@ class Duco : public uart::UARTDevice, public Component {
   void reset_frame_();
   void update_warning_();  // warn while any device's previous request went unanswered
   void finalize_message_();
+  void send_reply_(uint8_t function, uint8_t id, const uint8_t *data, uint8_t size);
   uint8_t next_id_();
 
   [[no_unique_address]] SlotList<DucoPendingRequest, DUCO_DEVICE_COUNT> pending_;
