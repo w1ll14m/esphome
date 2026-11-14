@@ -55,14 +55,6 @@ PROGMEM_STRING_TABLE(
     "Unknown DUCO error");
 static_assert(ErrorCodes::COUNT + 1 == ErrorDescriptions::COUNT);
 
-static size_t append_flash_str(char *buf, size_t size, size_t pos, ProgmemStr str) {
-#ifdef USE_ESP8266
-  return buf_append_str_p(buf, size, pos, reinterpret_cast<PGM_P>(str));
-#else
-  return buf_append_str(buf, size, pos, str);
-#endif
-}
-
 // One line per error, with its description or only its code. Returns the text length, or 0 if it does not fit
 // in MAX_ERROR_TEXT_LENGTH; text holds one byte more than that so a cut off text is told apart from a full one.
 static size_t format_errors(const uint8_t *records, uint8_t count, char *text, size_t size, bool descriptions) {
@@ -74,8 +66,9 @@ static size_t format_errors(const uint8_t *records, uint8_t count, char *text, s
     if (descriptions && pos < size) {
       const int16_t description_index = progmem_string_table_find<ErrorCodes>(text + code_start, pos - code_start);
       pos = buf_append_str(text, size, pos, "  ");
-      pos = append_flash_str(text, size, pos,
-                             ErrorDescriptions::get_progmem_str(description_index, ErrorDescriptions::LAST_INDEX));
+      pos = buf_append_str_p(text, size, pos,
+                             reinterpret_cast<ESPHOME_PGM_P>(
+                                 ErrorDescriptions::get_progmem_str(description_index, ErrorDescriptions::LAST_INDEX)));
     }
     pos = buf_append_str(text, size, pos, "\n");
   }
