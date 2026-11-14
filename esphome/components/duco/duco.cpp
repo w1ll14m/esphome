@@ -228,10 +228,11 @@ void DucoDiscovery::update() {
 
 void DucoDiscovery::receive_response(const DucoMessage &message) {
   // Only the latest attempt is open, so a late answer to an earlier one never arrives here
-  if (message.size >= 2 && this->next_node_ < NODE_COUNT) {
+  if (message.size >= 1 && this->next_node_ < NODE_COUNT) {
     if (message.data[0] != 0) {
       ESP_LOGV(TAG, "Found node %u: type %u", this->next_node_, message.data[0]);
-      this->node_types_[this->next_node_] = node_type_byte(message.data[0], message.data[1]);
+      // A one-byte answer has no network type
+      this->node_types_[this->next_node_] = node_type_byte(message.data[0], message.size >= 2 ? message.data[1] : 0);
     }
     this->next_node_++;
     this->attempts_ = 0;
