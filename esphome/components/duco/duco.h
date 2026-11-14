@@ -23,11 +23,6 @@ static constexpr uint8_t FUNCTION_ERRORS = 0x30;     // the active errors of a n
 /// Set in a node type byte for a node on network type 3 (BS); the node type codes stay below it.
 static constexpr uint8_t NODE_TYPE_BS = 0x80;
 
-/// The node type byte for the type and network type of a node's answer.
-inline uint8_t node_type_byte(uint8_t type, uint8_t network_type) {
-  return type | (network_type == 3 ? NODE_TYPE_BS : 0);
-}
-
 /// The name of a node type byte.
 const LogString *node_type_name(uint8_t type);
 
@@ -37,6 +32,11 @@ struct DucoMessage {
   const uint8_t *data;
   uint8_t size;
 };
+
+/// The node type byte of a non-empty node answer; a one-byte answer has no network type.
+inline uint8_t node_type_byte(const DucoMessage &message) {
+  return message.data[0] | (message.size >= 2 && message.data[1] == 3 ? NODE_TYPE_BS : 0);
+}
 
 class DucoDevice;
 

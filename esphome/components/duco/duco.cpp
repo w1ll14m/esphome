@@ -231,8 +231,7 @@ void DucoDiscovery::receive_response(const DucoMessage &message) {
   if (message.size >= 1 && this->next_node_ < NODE_COUNT) {
     if (message.data[0] != 0) {
       ESP_LOGV(TAG, "Found node %u: type %u", this->next_node_, message.data[0]);
-      // A one-byte answer has no network type
-      this->node_types_[this->next_node_] = node_type_byte(message.data[0], message.size >= 2 ? message.data[1] : 0);
+      this->node_types_[this->next_node_] = node_type_byte(message);
     }
     this->next_node_++;
     this->attempts_ = 0;
