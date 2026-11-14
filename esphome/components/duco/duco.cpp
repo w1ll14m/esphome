@@ -56,7 +56,7 @@ void Duco::close_request(DucoDevice *device) {
 bool Duco::parse_byte_(uint8_t byte) {
   const size_t at = this->rx_size_;
   if (at >= MAX_FRAME_SIZE) {
-    ESP_LOGV(TAG, "Message longer than %u bytes dropped", static_cast<unsigned>(MAX_FRAME_SIZE));
+    ESP_LOGW(TAG, "Message longer than %u bytes dropped", static_cast<unsigned>(MAX_FRAME_SIZE));
     return false;
   }
   const uint8_t prev = at > 0 ? this->rx_buffer_[at - 1] : 0;

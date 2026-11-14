@@ -6,12 +6,14 @@
 #include <cstring>
 
 #include "esphome/core/helpers.h"
+#include "esphome/core/log.h"
 #include "esphome/core/progmem.h"
 
 namespace esphome::duco {
 
 #ifdef USE_DUCO_ERROR_TEXT_SENSOR
 // Only built when an error text sensor is configured; the tables are about 3 kB of flash
+ESPHOME_LOG_TAG(TAG, "duco.text_sensor");
 static constexpr size_t MAX_ERROR_TEXT_LENGTH = 255;
 
 PROGMEM_STRING_TABLE(ErrorCodes, "E01.04.01", "E03.01.01", "E03.01.02", "E03.01.03", "E03.01.04", "E03.01.05",
@@ -157,8 +159,10 @@ void DucoTextSensor::publish_errors_(const DucoMessage &message) {
     return;
   }
   const uint8_t error_count = message.data[0];
-  if (message.size < 1 + static_cast<size_t>(error_count) * 5)
+  if (message.size < 1 + static_cast<size_t>(error_count) * 5) {
+    ESP_LOGW(TAG, "Error answer for %u errors has only %u bytes", error_count, message.size);
     return;
+  }
 
   char text[MAX_ERROR_TEXT_LENGTH + 2];
   size_t length = format_errors(message.data + 1, error_count, text, sizeof(text), true);
